@@ -5,3 +5,5 @@ datum,cena_eur_g,volatilnost,delta_call,sma5,sma20,momentum,tocke,signal,jakost,
 2026-04-01 23:06:02,131.86,0.22,0.5256,125.82,132.44,-5.55,-1,PRODAJ / NE KUPUJ,šibek signal – počakaj,138.51,119.38
 2026-04-01 23:11:03,131.86,0.22,0.5256,125.81,132.43,-5.54,-1,PRODAJ / NE KUPUJ,šibek signal – počakaj,138.51,119.38
 2026-04-01 23:25:50,131.86,0.22,0.5256,125.81,132.43,-5.54,-1,PRODAJ / NE KUPUJ,šibek signal – počakaj,138.51,119.38
+2026-04-02 17:35:53,130.44,0.22,0.5081,128.72,133.14,-8.87,-2,PRODAJ / NE KUPUJ,šibek signal – počakaj,131.09,129.14
+2026-04-02 17:48:07,130.11,0.22,0.5081,128.21,132.56,-8.71,-2,PRODAJ / NE KUPUJ,šibek signal – počakaj,130.76,128.81

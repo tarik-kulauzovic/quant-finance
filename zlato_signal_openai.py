@@ -152,7 +152,7 @@ def black_scholes(S, K, T, r, sigma, tip="call"):
 # 4. SIGNAL LOGIKA
 # ══════════════════════════════════════════════════════════════
 
-def izracunaj_signal(S, sigma, cene_hist, T_dni=30, r=0.025):
+def izracunaj_signal(S, sigma, cene_hist, T_dni=3, r=0.025):
     K = round(S, 2)
     T = T_dni / 365.0
 
@@ -214,11 +214,11 @@ def izracunaj_signal(S, sigma, cene_hist, T_dni=30, r=0.025):
     pricakovan_premik = S * sigma * np.sqrt(T)
 
     if odlocitev == "KUPI":
-        stop_loss = round(S - pricakovan_premik * 0.8, 2)
-        take_profit = round(S + pricakovan_premik * 1.5, 2)
+        stop_loss = round(S - pricakovan_premik * 0.25, 2)
+        take_profit = round(S + pricakovan_premik * 0.5, 2)
     elif odlocitev == "PRODAJ / NE KUPUJ":
-        stop_loss = round(S + pricakovan_premik * 0.8, 2)
-        take_profit = round(S - pricakovan_premik * 1.5, 2)
+        stop_loss = round(S + pricakovan_premik * 0.25, 2)
+        take_profit = round(S - pricakovan_premik * 0.5, 2)
     else:
         stop_loss = None
         take_profit = None
