@@ -1,29 +1,14 @@
-"""
-╔══════════════════════════════════════════════════════════════╗
-║         ZLATO INVESTICIJSKI SIGNAL – XAUEUR                  ║
-║         Black-Scholes + Tehnična analiza                     ║
-╚══════════════════════════════════════════════════════════════╝
-
-NAMESTITEV (enkrat):
-    pip install numpy scipy requests
-
-ZAGON:
-    python zlato_signal.py
-
-VIRI PODATKOV:
-    Cena zlata : gold-api.com  (brezplačno, brez registracije, brez ključa)
-    EUR tečaj  : frankfurter.app (Evropska centralna banka, brez ključa)
-    Volatilnost: Yahoo Finance GC=F v USD (čisto, brez EUR konverzije)
-"""
-
 import numpy as np
 from scipy.stats import norm
 from datetime import datetime
+import csv
+import os
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
     "Accept": "application/json"
 }
+
 
 def _get(url, timeout=8):
     import requests
@@ -31,51 +16,38 @@ def _get(url, timeout=8):
 
 
 # ══════════════════════════════════════════════════════════════
-# 1. PRIDOBITEV PODATKOV
+# 1. PRIDOBITEV PODATKOV  (vse v USD/unca)
 # ══════════════════════════════════════════════════════════════
 
 def pridobi_spot_usd():
-    """
-    gold-api.com — brezplačen, brez API ključa, brez omejitev.
-    Vrne spot ceno XAU v USD za troy unco.
-    """
+    # Poskusi Yahoo Finance GC=F (futures, bližje TradingView)
+    try:
+        r = _get(
+            "https://query1.finance.yahoo.com/v8/finance/chart/GC=F"
+            "?interval=1m&range=1d"
+        )
+        closes = r.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+        cena = [x for x in closes if x is not None][-1]
+        print(f"  ✓ Yahoo GC=F spot: {cena:.2f} USD/unca")
+        return float(cena)
+    except Exception as e:
+        print(f"  ✗ Yahoo GC=F ni uspel: {e}")
+
+    # Fallback: gold-api.com
     try:
         r = _get("https://api.gold-api.com/price/XAU")
-        data = r.json()
-        cena_usd = data["price"]
-        print(f"  ✓ gold-api.com: {cena_usd:.2f} USD/unca")
-        return float(cena_usd)
+        cena = float(r.json()["price"])
+        print(f"  ✓ gold-api.com: {cena:.2f} USD/unca (spot, možen delay)")
+        return cena
     except Exception as e:
         print(f"  ✗ gold-api.com ni uspel: {e}")
         return None
 
 
-def pridobi_eurusd():
+def pridobi_zgodovinske_usd():
     """
-    Frankfurter.app — uradni ECB tečaj, brezplačen, brez ključa.
-    """
-    try:
-        r = _get("https://api.frankfurter.app/latest?from=USD&to=EUR")
-        eurusd = r.json()["rates"]["EUR"]
-        print(f"  ✓ ECB tečaj (frankfurter.app): 1 USD = {eurusd:.4f} EUR")
-        return float(eurusd)
-    except Exception as e:
-        print(f"  ✗ Frankfurter ni uspel: {e}")
-        # Rezervni vir
-        try:
-            r = _get("https://open.er-api.com/v6/latest/USD")
-            eurusd = r.json()["rates"]["EUR"]
-            print(f"  ✓ Rezervni tečaj (open.er-api): 1 USD = {eurusd:.4f} EUR")
-            return float(eurusd)
-        except Exception:
-            return None
-
-
-def pridobi_volatilnost_usd():
-    """
-    Yahoo Finance GC=F — zadnjih 20 dnevnih zaprtij v USD.
-    Volatilnost računamo SAMO v USD, da se izognemo šumu EUR konverzije.
-    Volatilnost zlata je skoraj identična v USD in EUR (razlika < 0.5%).
+    30-dnevne dnevne closing cene GC=F (USD/unca) z Yahooja.
+    Vrne (sigma, cene) ali None.
     """
     try:
         r = _get(
@@ -84,66 +56,65 @@ def pridobi_volatilnost_usd():
         )
         closes = r.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"]
         cene = [x for x in closes if x is not None][-20:]
+
         if len(cene) < 5:
+            print("  ✗ Yahoo GC=F: premalo podatkov")
             return None
+
         donosi = np.diff(np.log(cene))
         sigma = float(np.std(donosi) * np.sqrt(252))
-        # Realen razpon za zlato: 10%–22%
         sigma = min(max(sigma, 0.10), 0.22)
-        print(f"  ✓ Volatilnost (Yahoo GC=F USD, {len(cene)} dni): {sigma*100:.1f}%")
+
+        print(f"  ✓ Yahoo GC=F: {len(cene)} dni, "
+              f"zadnja = {cene[-1]:.2f} USD/unca, "
+              f"vol = {sigma*100:.1f}%")
         return sigma, cene
     except Exception as e:
-        print(f"  ✗ Yahoo volatilnost ni uspela: {e}")
+        print(f"  ✗ Yahoo GC=F ni uspel: {e}")
         return None
 
 
 def pridobi_vse():
-    """Pridobi vse podatke in vrne S (EUR/gram), sigma, cene_hist."""
     print("\n  Pridobivam podatke...\n")
 
-    xauusd  = pridobi_spot_usd()
-    eurusd  = pridobi_eurusd()
-    vol_ret = pridobi_volatilnost_usd()
+    S        = pridobi_spot_usd()
+    hist_ret = pridobi_zgodovinske_usd()
 
     print()
 
-    if xauusd and eurusd:
-        S = round((xauusd * eurusd) / 31.1035, 2)
-        print(f"  Preračun: {xauusd:.2f} USD/unca × {eurusd:.4f} EUR/USD ÷ 31.1035 = {S} EUR/gram")
-        avto = True
-    else:
-        S = None
-        avto = False
+    avto = S is not None
 
-    if vol_ret:
-        sigma, cene_hist = vol_ret
+    if hist_ret:
+        sigma, cene_hist = hist_ret
     else:
-        sigma = 0.15
+        sigma     = 0.15
         cene_hist = []
-        print(f"  ℹ  Privzeta volatilnost: 15%")
+        print("  ℹ Privzeta volatilnost: 15%")
 
     return S, sigma, cene_hist, avto
 
 
 # ══════════════════════════════════════════════════════════════
-# 2. ROČNI VNOS
+# 2. ROCNI VNOS
 # ══════════════════════════════════════════════════════════════
 
 def vnesi_rocno():
     print()
-    print("  Kje najdeš ceno XAUEUR/gram:")
-    print("  → TradingView: tradingview.com  (išči XAUEUR, deli z 31.1035 za gram)")
-    print("  → Google: 'gold price EUR per gram'")
+    print("  Kje najdes ceno XAUUSD:")
+    print("  -> TradingView: XAUUSD")
+    print("  -> Pepperstone / Forex.com: Gold Spot / U.S. Dollar")
     print()
+
     while True:
         try:
-            vnos = input("  Vpiši trenutno ceno [EUR/gram]: ").strip().replace(",", ".")
+            vnos = input("  Vpisi trenutno ceno [USD/unca]: ").strip().replace(",", ".")
             S = float(vnos)
-            if 50 < S < 600:
+            if 1500 < S < 5000:
                 break
-            print("  Vrednost mora biti med 50 in 600.")
+            print("  Vrednost mora biti med 1500 in 5000.")
         except ValueError:
-            print("  Napaka – vnesi samo številko, npr. 132.18")
+            print("  Napaka - vnesi samo stevilko")
+
     return S
 
 
@@ -153,151 +124,236 @@ def vnesi_rocno():
 
 def black_scholes(S, K, T, r, sigma, tip="call"):
     if T <= 0:
-        return (max(S-K,0) if tip=="call" else max(K-S,0)), 0, 0, 0, 0
+        return (max(S-K, 0) if tip == "call" else max(K-S, 0)), 0, 0, 0, 0
+
     d1 = (np.log(S/K) + (r + 0.5*sigma**2)*T) / (sigma*np.sqrt(T))
     d2 = d1 - sigma*np.sqrt(T)
+
     if tip == "call":
         cena  = S*norm.cdf(d1) - K*np.exp(-r*T)*norm.cdf(d2)
         delta = norm.cdf(d1)
     else:
         cena  = K*np.exp(-r*T)*norm.cdf(-d2) - S*norm.cdf(-d1)
         delta = norm.cdf(d1) - 1
+
     gamma = norm.pdf(d1) / (S*sigma*np.sqrt(T))
     theta = (-(S*norm.pdf(d1)*sigma)/(2*np.sqrt(T))
              - r*K*np.exp(-r*T)*norm.cdf(d2 if tip=="call" else -d2)) / 365
     vega  = S*norm.pdf(d1)*np.sqrt(T) / 100
+
     return cena, delta, gamma, theta, vega
 
 
 # ══════════════════════════════════════════════════════════════
-# 4. SIGNAL LOGIKA
+# 4. ATR IZRACUN  (Wilder's smoothed, iz closing cen)
 # ══════════════════════════════════════════════════════════════
 
-def izracunaj_signal(S, sigma, cene_hist, T_dni=30, r=0.025):
+def izracunaj_atr(cene, period=14):
+    """
+    Aproksimacija ATR iz dnevnih closing cen (brez high/low).
+    True range = |close[i] - close[i-1]|
+    """
+    if not cene or len(cene) < period + 1:
+        return None
+
+    tr = [abs(cene[i] - cene[i-1]) for i in range(1, len(cene))]
+
+    atr = float(np.mean(tr[:period]))
+    for x in tr[period:]:
+        atr = (atr * (period - 1) + x) / period
+
+    return atr
+
+
+# ══════════════════════════════════════════════════════════════
+# 5. SIGNAL LOGIKA
+# ══════════════════════════════════════════════════════════════
+
+def izracunaj_signal(S, sigma, cene_hist, T_dni=3, r=0.025,
+                     atr_period=14, atr_mult_sl=1.5, atr_mult_tp=2.5):
+
     K = round(S, 2)
     T = T_dni / 365.0
 
     _, delta_call, gamma, theta, vega = black_scholes(S, K, T, r, sigma, "call")
-    _, delta_put, *_                  = black_scholes(S, K, T, r, sigma, "put")
+    _, delta_put,  *_                 = black_scholes(S, K, T, r, sigma, "put")
 
-    # Tehnična analiza iz USD cen (proporcionalno enako kot EUR)
     if cene_hist and len(cene_hist) >= 5:
-        # Normaliziramo USD cene na zadnjo vrednost da dobimo trend
-        faktor = S / cene_hist[-1]
-        cene_eur = [c * faktor for c in cene_hist]
-        sma5  = float(np.mean(cene_eur[-5:]))
-        sma20 = float(np.mean(cene_eur))
+        sma5  = float(np.mean(cene_hist[-5:]))
+        sma20 = float(np.mean(cene_hist))
         trend_gor = S > sma5 > sma20
         trend_dol = S < sma5 < sma20
         momentum  = (cene_hist[-1] - cene_hist[0]) / cene_hist[0] * 100
     else:
         sma5 = sma20 = S
         trend_gor = trend_dol = False
-        momentum = 0.0
+        momentum  = 0.0
 
     tocke = 0
+
     if delta_call > 0.60:    tocke += 2
     elif delta_call > 0.52:  tocke += 1
     elif delta_call < 0.40:  tocke -= 2
     elif delta_call < 0.48:  tocke -= 1
 
-    if trend_gor:             tocke += 2
-    elif trend_dol:           tocke -= 2
+    if trend_gor:   tocke += 2
+    elif trend_dol: tocke -= 2
 
-    if momentum > 1.5:        tocke += 1
-    elif momentum < -1.5:     tocke -= 1
+    if momentum > 1.5:    tocke += 1
+    elif momentum < -1.5: tocke -= 1
 
-    if sigma > 0.20:          tocke -= 1
-    elif sigma < 0.12:        tocke += 1
+    if sigma > 0.20:    tocke -= 1
+    elif sigma < 0.12:  tocke += 1
 
     if tocke >= 3:
-        odlocitev, jakost, emoji = "KUPI",              "močan signal",                   "🟢"
+        odlocitev, jakost, emoji = "KUPI",              "mocen signal",              "🟢"
     elif tocke >= 1:
-        odlocitev, jakost, emoji = "KUPI",              "šibek signal – manjša pozicija", "🟡"
+        odlocitev, jakost, emoji = "KUPI",              "sibek signal - manj. poz.", "🟡"
     elif tocke <= -3:
-        odlocitev, jakost, emoji = "PRODAJ / NE KUPUJ", "močan signal",                   "🔴"
+        odlocitev, jakost, emoji = "PRODAJ / NE KUPUJ", "mocen signal",              "🔴"
     elif tocke <= -1:
-        odlocitev, jakost, emoji = "PRODAJ / NE KUPUJ", "šibek signal – počakaj",         "🟠"
+        odlocitev, jakost, emoji = "PRODAJ / NE KUPUJ", "sibek signal - pocakaj",    "🟠"
     else:
-        odlocitev, jakost, emoji = "ČAKAJ",             "trg je nevtralen",               "⚪"
+        odlocitev, jakost, emoji = "CAKAJ",             "trg je nevtralen",          "⚪"
 
-    return dict(
-        S=S, K=K, sigma=sigma, T_dni=T_dni,
-        delta_call=delta_call, delta_put=delta_put,
-        gamma=gamma, theta=theta, vega=vega,
-        sma5=sma5, sma20=sma20, momentum=momentum,
-        tocke=tocke, odlocitev=odlocitev, jakost=jakost, emoji=emoji,
-        trend_gor=trend_gor, trend_dol=trend_dol,
-    )
+    pricakovan_premik = S * sigma * np.sqrt(T)
+
+    atr_raw = izracunaj_atr(cene_hist, period=atr_period)
+    if atr_raw is not None:
+        atr     = atr_raw
+        atr_vir = "GC=F"
+    else:
+        atr     = pricakovan_premik * 0.5
+        atr_vir = "vol-fallback"
+
+    print(f"  ATR ({atr_vir}, {atr_period}-period): {atr:.2f} USD/unca")
+
+    if odlocitev == "KUPI":
+        stop_loss   = round(S - atr * atr_mult_sl, 2)
+        take_profit = round(S + atr * atr_mult_tp, 2)
+    elif odlocitev == "PRODAJ / NE KUPUJ":
+        stop_loss   = round(S + atr * atr_mult_sl, 2)
+        take_profit = round(S - atr * atr_mult_tp, 2)
+    else:
+        stop_loss = take_profit = None
+
+    return {
+        "S":                 S,
+        "sigma":             sigma,
+        "T_dni":             T_dni,
+        "delta_call":        delta_call,
+        "sma5":              sma5,
+        "sma20":             sma20,
+        "momentum":          momentum,
+        "tocke":             tocke,
+        "odlocitev":         odlocitev,
+        "jakost":            jakost,
+        "emoji":             emoji,
+        "pricakovan_premik": pricakovan_premik,
+        "atr":               atr,
+        "atr_vir":           atr_vir,
+        "atr_mult_sl":       atr_mult_sl,
+        "atr_mult_tp":       atr_mult_tp,
+        "stop_loss":         stop_loss,
+        "take_profit":       take_profit,
+    }
 
 
 # ══════════════════════════════════════════════════════════════
-# 5. IZPIS
+# 6. IZPIS
 # ══════════════════════════════════════════════════════════════
 
 def izpisi(r):
-    cas = datetime.now().strftime("%d.%m.%Y  %H:%M")
-    print()
-    print("╔══════════════════════════════════════════════════════════════╗")
-    print("║         XAUEUR – ZLATO INVESTICIJSKI SIGNAL                 ║")
-    print(f"║         {cas}                                    ║")
-    print("╚══════════════════════════════════════════════════════════════╝")
-    print(f"""
-  VHODNI PODATKI
-  ──────────────────────────────────────────────────
-  Cena zlata (S)   : {r['S']:.2f} EUR/gram
-  Strike (K)       : {r['K']:.2f} EUR/gram
-  Volatilnost (σ)  : {r['sigma']*100:.1f}%  ← realna (USD GC=F, brez EUR šuma)
-  Horizont         : {r['T_dni']} dni
-  Obrestna mera    : 2.5% (ECB)
+    cas = datetime.now().strftime("%d.%m.%Y %H:%M")
 
-  BLACK-SCHOLES GREEKS
-  ──────────────────────────────────────────────────
-  Delta CALL  : {r['delta_call']:.4f}   {'▲ bullish' if r['delta_call'] > 0.52 else ('▼ bearish' if r['delta_call'] < 0.48 else '─ nevtralno')}
-  Delta PUT   : {r['delta_put']:.4f}
-  Gamma       : {r['gamma']:.6f}
-  Theta       : {r['theta']:.4f} EUR/dan  (dnevna časovna erozija)
-  Vega        : {r['vega']:.4f}           (občutljivost na vol.)
+    print(f"\n{'='*55}")
+    print("  XAUUSD - ZLATO INVESTICIJSKI SIGNAL")
+    print(f"  {cas}")
+    print(f"{'='*55}\n")
 
-  TEHNIČNA ANALIZA
-  ──────────────────────────────────────────────────
-  SMA 5-dni   : {r['sma5']:.2f} EUR   {'✓ cena nad SMA5' if r['S'] > r['sma5'] else '✗ cena pod SMA5'}
-  SMA 20-dni  : {r['sma20']:.2f} EUR   {'✓ bullish trend' if r['trend_gor'] else ('✗ bearish trend' if r['trend_dol'] else '─ nevtralno')}
-  Momentum    : {r['momentum']:+.2f}%  {'↑ pozitiven' if r['momentum'] > 0 else '↓ negativen'}
+    print(f"  Cena (USD/unca)   : {r['S']:.2f}")
+    print(f"  Volatilnost       : {r['sigma']*100:.1f}%")
+    print(f"  SMA5              : {r['sma5']:.2f}")
+    print(f"  SMA20             : {r['sma20']:.2f}")
+    print(f"  Momentum          : {r['momentum']:+.2f}%")
+    print(f"  Delta CALL        : {r['delta_call']:.4f}")
+    print(f"  Tocke             : {r['tocke']:+d}")
+    print()
+    print(f"  Signal            : {r['emoji']}  {r['odlocitev']}")
+    print(f"  Jakost            : {r['jakost']}")
+    print()
+    print(f"  Pricakovan premik : +/-{r['pricakovan_premik']:.2f} USD")
+    print(f"  ATR ({r['atr_vir']}, {r['atr_mult_sl']}x/{r['atr_mult_tp']}x) : {r['atr']:.2f} USD/unca")
 
-  TOČKOVANJE   {r['tocke']:+d} / max 6
-  (pozitivno = bullish, negativno = bearish)
-""")
-    print("  ╔══════════════════════════════════════════╗")
-    print(f"  ║  {r['emoji']}  {r['odlocitev']:<40}║")
-    print(f"  ║     {r['jakost']:<43}║")
-    print("  ╚══════════════════════════════════════════╝")
-    print()
-    print("  ⚠  Informativno orodje – ni finančni nasvet.")
-    print()
-    print("  ══════════════════════════════════════════")
-    print(f"  KONČNI ODGOVOR:  {r['odlocitev']}")
-    print("  ══════════════════════════════════════════")
-    print()
+    if r['stop_loss'] is not None:
+        print()
+        print(f"{'─'*55}")
+        print("  TRADINGVIEW / PEPPERSTONE  -  XAUUSD (USD/unca)")
+        print(f"{'─'*55}")
+        print(f"  Buy cena    : {r['S']:.2f}")
+        print(f"  Stop Loss   : {r['stop_loss']:.2f}")
+        print(f"  Take Profit : {r['take_profit']:.2f}")
+        print(f"{'─'*55}")
 
 
 # ══════════════════════════════════════════════════════════════
-# 6. MAIN
+# 7. CSV SHRANJEVANJE
+# ══════════════════════════════════════════════════════════════
+
+def shrani_csv(r):
+    ime = "zgodovina_signalov.csv"
+    obstaja = os.path.exists(ime)
+
+    with open(ime, mode="a", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        if not obstaja:
+            w.writerow([
+                "datum", "cena_usd_unca", "volatilnost",
+                "delta_call", "sma5", "sma20", "momentum",
+                "tocke", "signal", "jakost",
+                "atr", "atr_vir", "stop_loss", "take_profit"
+            ])
+        w.writerow([
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            r['S'],
+            round(r['sigma'], 4),
+            round(r['delta_call'], 4),
+            round(r['sma5'], 2),
+            round(r['sma20'], 2),
+            round(r['momentum'], 2),
+            r['tocke'],
+            r['odlocitev'],
+            r['jakost'],
+            round(r['atr'], 2),
+            r['atr_vir'],
+            r['stop_loss'],
+            r['take_profit'],
+        ])
+
+    print(f"\n  ✓ Signal shranjen v {ime}")
+
+
+# ══════════════════════════════════════════════════════════════
+# 8. MAIN
 # ══════════════════════════════════════════════════════════════
 
 def main():
-    print("\n  ╔══════════════════════════════════════╗")
-    print("  ║   ZLATO SIGNAL – zaganjam...         ║")
-    print("  ╚══════════════════════════════════════╝")
+    print("\n  Zaganjam XAUUSD signal...\n")
 
     S, sigma, cene_hist, avto = pridobi_vse()
 
     if not avto or not S:
-        print("  Avtomatski prenos cene ni uspel.")
+        print("  Avtomatski prenos ni uspel.")
         S = vnesi_rocno()
 
-    rezultat = izracunaj_signal(S, sigma, cene_hist)
+    rezultat = izracunaj_signal(
+        S, sigma, cene_hist,
+        atr_period=14,    # ATR obdobje (dni)
+        atr_mult_sl=1.5,  # Stop Loss  = cena +/- ATR x 1.5
+        atr_mult_tp=2.5,  # Take Profit = cena +/- ATR x 2.5
+    )
     izpisi(rezultat)
+    shrani_csv(rezultat)
 
 
 if __name__ == "__main__":
