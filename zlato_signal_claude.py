@@ -90,8 +90,8 @@ VOL_THRESH  = 1.2   # volume must be 1.2x the 20-day average
 RSI_PERIOD      = 14
 RSI_LONG_MIN    = 40   # RSI must be above this for a long
 RSI_LONG_MAX    = 65   # RSI must be below this (not overbought)
-RSI_SHORT_MIN   = 35   # RSI must be below this for a short
-RSI_SHORT_MAX   = 60   # RSI must be above this (not oversold)
+RSI_SHORT_MIN   = 55   # RSI must be below this for a short
+RSI_SHORT_MAX   = 75   # RSI must be above this (not oversold)
 
 # ==============================================================
 # POMOZNE FUNKCIJE
@@ -578,7 +578,7 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
 
     # RSI zone checks for long/short
     rsi_long_ok  = (rsi is not None) and (RSI_LONG_MIN  <= rsi <= RSI_LONG_MAX)
-    rsi_short_ok = (rsi is not None) and (RSI_SHORT_MIN >= rsi or rsi >= RSI_SHORT_MAX)
+    rsi_short_ok = (rsi is not None) and (55 <= rsi <= 75)
 
     # --- MACD ---
     macd_ret = izracunaj_macd(cene_hist) if N >= 35 else (None, None, None, False, False)
