@@ -1,6 +1,12 @@
 """
-MULTI-TICKER SIGNAL TRACKER
+MULTI-TICKER SIGNAL TRACKER  v1.1
 Delnice | Kripto | Surovine | Indeksi | Forex
+
+Novosti v1.1:
+  - Rough Heston volatility model (frakcionalni kernel, H po asset razredu)
+  - Vol rezim detekcija (EXPANDING / CONTRACTING / NORMAL)
+  - Adaptivni H po asset razredu (kripto=0.08, delnice=0.10, forex=0.12, surovine=0.11)
+  - SL/TP korekcija glede na vol rezim
 
 NAMESTITEV (enkrat):
     pip install yfinance numpy scipy requests
@@ -26,32 +32,50 @@ except ImportError:
 # TICKER KONFIGURACIJSKI SLOVAR
 # ==============================================================
 
+# asset_class: "crypto" | "stock" | "index" | "commodity" | "forex" | "metal"
 TICKER_CONFIG = {
     # --- PLEMENITE KOVINE ---
-    "XAUUSD": {"yahoo_symbol": "GC=F",    "gold_api": "XAU", "opis": "Zlato (USD/unca)",          "min_cena": 1000,   "max_cena": 5000},
-    "XAGUSD": {"yahoo_symbol": "SI=F",    "gold_api": "XAG", "opis": "Srebro (USD/unca)",          "min_cena": 5,      "max_cena": 500},
+    "XAUUSD": {"yahoo_symbol": "GC=F",    "gold_api": "XAU", "opis": "Zlato (USD/unca)",          "min_cena": 1000,   "max_cena": 5000,        "asset_class": "metal"},
+    "XAGUSD": {"yahoo_symbol": "SI=F",    "gold_api": "XAG", "opis": "Srebro (USD/unca)",          "min_cena": 5,      "max_cena": 500,         "asset_class": "metal"},
     # --- ENERGIJA ---
-    "WTI":    {"yahoo_symbol": "CL=F",                       "opis": "WTI Nafta (USD/sod)",        "min_cena": 10,     "max_cena": 300},
-    "BRENT":  {"yahoo_symbol": "BZ=F",                       "opis": "Brent Nafta (USD/sod)",      "min_cena": 10,     "max_cena": 300},
-    "NGAS":   {"yahoo_symbol": "NG=F",                       "opis": "Naravni plin (USD/MMBtu)",   "min_cena": 0.5,    "max_cena": 50},
+    "WTI":    {"yahoo_symbol": "CL=F",                       "opis": "WTI Nafta (USD/sod)",        "min_cena": 10,     "max_cena": 300,         "asset_class": "commodity"},
+    "BRENT":  {"yahoo_symbol": "BZ=F",                       "opis": "Brent Nafta (USD/sod)",      "min_cena": 10,     "max_cena": 300,         "asset_class": "commodity"},
+    "NGAS":   {"yahoo_symbol": "NG=F",                       "opis": "Naravni plin (USD/MMBtu)",   "min_cena": 0.5,    "max_cena": 50,          "asset_class": "commodity"},
     # --- KRIPTO ---
-    "BTCUSD": {"yahoo_symbol": "BTC-USD",                    "opis": "Bitcoin (USD)",               "min_cena": 1000,   "max_cena": 500000},
-    "ETHUSD": {"yahoo_symbol": "ETH-USD",                    "opis": "Ethereum (USD)",              "min_cena": 10,     "max_cena": 50000},
-    "SOLUSD": {"yahoo_symbol": "SOL-USD",                    "opis": "Solana (USD)",                "min_cena": 0.1,    "max_cena": 5000},
-    "XRPUSD": {"yahoo_symbol": "XRP-USD",                    "opis": "XRP (USD)",                   "min_cena": 0.0001, "max_cena": 1000},
+    "BTCUSD": {"yahoo_symbol": "BTC-USD",                    "opis": "Bitcoin (USD)",               "min_cena": 1000,   "max_cena": 500000,      "asset_class": "crypto"},
+    "ETHUSD": {"yahoo_symbol": "ETH-USD",                    "opis": "Ethereum (USD)",              "min_cena": 10,     "max_cena": 50000,       "asset_class": "crypto"},
+    "SOLUSD": {"yahoo_symbol": "SOL-USD",                    "opis": "Solana (USD)",                "min_cena": 0.1,    "max_cena": 5000,        "asset_class": "crypto"},
+    "XRPUSD": {"yahoo_symbol": "XRP-USD",                    "opis": "XRP (USD)",                   "min_cena": 0.0001, "max_cena": 1000,        "asset_class": "crypto"},
     # --- INDEKSI ---
-    "SPX":    {"yahoo_symbol": "^GSPC",                      "opis": "S&P 500",                     "min_cena": 500,    "max_cena": 20000},
-    "NDX":    {"yahoo_symbol": "^IXIC",                      "opis": "NASDAQ Composite",            "min_cena": 500,    "max_cena": 50000},
-    "DAX":    {"yahoo_symbol": "^GDAXI",                     "opis": "DAX (Frankfurt)",             "min_cena": 1000,   "max_cena": 30000},
+    "SPX":    {"yahoo_symbol": "^GSPC",                      "opis": "S&P 500",                     "min_cena": 500,    "max_cena": 20000,       "asset_class": "index"},
+    "NDX":    {"yahoo_symbol": "^IXIC",                      "opis": "NASDAQ Composite",            "min_cena": 500,    "max_cena": 50000,       "asset_class": "index"},
+    "DAX":    {"yahoo_symbol": "^GDAXI",                     "opis": "DAX (Frankfurt)",             "min_cena": 1000,   "max_cena": 30000,       "asset_class": "index"},
     # --- DELNICE ---
-    "AAPL":   {"yahoo_symbol": "AAPL",                       "opis": "Apple Inc.",                  "min_cena": 1,      "max_cena": 10000},
-    "TSLA":   {"yahoo_symbol": "TSLA",                       "opis": "Tesla Inc.",                  "min_cena": 1,      "max_cena": 10000},
-    "NVDA":   {"yahoo_symbol": "NVDA",                       "opis": "NVIDIA Corp.",                "min_cena": 1,      "max_cena": 10000},
-    "MSFT":   {"yahoo_symbol": "MSFT",                       "opis": "Microsoft Corp.",             "min_cena": 1,      "max_cena": 10000},
-    "META":   {"yahoo_symbol": "META",                       "opis": "Meta Platforms",              "min_cena": 1,      "max_cena": 10000},
+    "AAPL":   {"yahoo_symbol": "AAPL",                       "opis": "Apple Inc.",                  "min_cena": 1,      "max_cena": 10000,       "asset_class": "stock"},
+    "TSLA":   {"yahoo_symbol": "TSLA",                       "opis": "Tesla Inc.",                  "min_cena": 1,      "max_cena": 10000,       "asset_class": "stock"},
+    "NVDA":   {"yahoo_symbol": "NVDA",                       "opis": "NVIDIA Corp.",                "min_cena": 1,      "max_cena": 10000,       "asset_class": "stock"},
+    "MSFT":   {"yahoo_symbol": "MSFT",                       "opis": "Microsoft Corp.",             "min_cena": 1,      "max_cena": 10000,       "asset_class": "stock"},
+    "META":   {"yahoo_symbol": "META",                       "opis": "Meta Platforms",              "min_cena": 1,      "max_cena": 10000,       "asset_class": "stock"},
     # --- FOREX ---
-    "EURUSD": {"yahoo_symbol": "EURUSD=X",                   "opis": "EUR/USD",                     "min_cena": 0.5,    "max_cena": 3.0},
-    "GBPUSD": {"yahoo_symbol": "GBPUSD=X",                   "opis": "GBP/USD",                     "min_cena": 0.5,    "max_cena": 3.0},
+    "EURUSD": {"yahoo_symbol": "EURUSD=X",                   "opis": "EUR/USD",                     "min_cena": 0.5,    "max_cena": 3.0,         "asset_class": "forex"},
+    "GBPUSD": {"yahoo_symbol": "GBPUSD=X",                   "opis": "GBP/USD",                     "min_cena": 0.5,    "max_cena": 3.0,         "asset_class": "forex"},
+}
+
+# ==============================================================
+# ROUGH HESTON - H VREDNOSTI PO ASSET RAZREDU
+# ==============================================================
+# H < 0.5 = "rough" volatility (realisticno za financne trge)
+# Nizji H = bolj groba, bolj neenakomerna volatilnost
+# Kripto: najbolj grob (H=0.08), Forex: najglajen (H=0.12)
+
+HURST_BY_CLASS = {
+    "crypto":    0.08,   # Kripto - zelo groba vol, mocni skoki
+    "stock":     0.10,   # Delnice - standardni financni trgi
+    "index":     0.10,   # Indeksi - podobno delnicam
+    "commodity": 0.11,   # Surovine - malo bolj gladko
+    "metal":     0.11,   # Kovine - podobno surovinam
+    "forex":     0.12,   # Forex - najbolj gladka vol
+    "unknown":   0.10,   # Privzeto za neznane simbole
 }
 
 TIMEFRAME_OPTIONS = {
@@ -60,38 +84,33 @@ TIMEFRAME_OPTIONS = {
     "3": {"interval": "1d",  "period": "90d", "opis": "Dnevni (swing/position)"},
 }
 
-ATR_MULT_SL   = 1.5   # swing: 1.5x ATR stop
-ATR_MULT_TP   = 3.0   # swing: 3.0x ATR target -> R:R = 1:2
-ATR_BREAKEVEN = 1.0   # move SL to breakeven once price moves 1x ATR in profit
+ATR_MULT_SL   = 1.5
+ATR_MULT_TP   = 3.0
+ATR_BREAKEVEN = 1.0
 
-# --- Adaptivni ATR period ---
-# V konsolidaciji uporabi krajsi period (7) -> manjsi, bolj realisticni SL/TP
-# V trendu ostane standardni 14
-ATR_PERIOD       = 14  # trend
+ATR_PERIOD       = 14
 ATR_PERIOD_TREND = 14
-ATR_PERIOD_CONS  = 7   # konsolidacija - bolj odziven na trenutni range
+ATR_PERIOD_CONS  = 7
 
-# --- Konsolidacijski filter (ADX + BB width) ---
-# ADX < 20  -> sideways, ne trguj
-# BB width / cena < BB_WIDTH_MIN -> ozek range, ne trguj
 ADX_PERIOD      = 14
-ADX_CONS_THRESH = 20    # pod tem = konsolidacija
-BB_PERIOD       = 20    # Bollinger Band period
-BB_STD          = 2.0   # standardni odklon za BB
-BB_WIDTH_MIN    = 0.02  # BB sirina / cena < 2% = konsolidacija
+ADX_CONS_THRESH = 20
+BB_PERIOD       = 20
+BB_STD          = 2.0
+BB_WIDTH_MIN    = 0.02
 
-# Swing-specific MA periods
-SMA_TREND   = 200   # long-term trend filter
-SMA_ENTRY   = 50    # medium-term entry context
-VOL_PERIOD  = 20    # volume average lookback
-VOL_THRESH  = 1.2   # volume must be 1.2x the 20-day average
+SMA_TREND   = 200
+SMA_ENTRY   = 50
+VOL_PERIOD  = 20
+VOL_THRESH  = 1.2
 
-# RSI settings
 RSI_PERIOD      = 14
-RSI_LONG_MIN    = 40   # RSI must be above this for a long
-RSI_LONG_MAX    = 65   # RSI must be below this (not overbought)
-RSI_SHORT_MIN   = 55   # RSI must be below this for a short
-RSI_SHORT_MAX   = 75   # RSI must be above this (not oversold)
+RSI_LONG_MIN    = 40
+RSI_LONG_MAX    = 65
+RSI_SHORT_MIN   = 55
+RSI_SHORT_MAX   = 75
+
+# Rough Heston window (koliko sveck gledamo za vol memory)
+RH_WINDOW = 30
 
 # ==============================================================
 # POMOZNE FUNKCIJE
@@ -136,6 +155,7 @@ def izberi_ticker():
         "opis":         vnos,
         "min_cena":     0.000001,
         "max_cena":     100_000_000,
+        "asset_class":  "unknown",
     }
     return vnos, cfg
 
@@ -152,12 +172,94 @@ def izberi_timeframe():
     return tf["interval"], tf["period"]
 
 
+def dobi_hurst(cfg):
+    """Vrne H vrednost glede na asset_class iz konfiguracije."""
+    asset_class = cfg.get("asset_class", "unknown")
+    H = HURST_BY_CLASS.get(asset_class, HURST_BY_CLASS["unknown"])
+    return H, asset_class
+
+
+# ==============================================================
+# ROUGH HESTON VOLATILITY MODEL
+# ==============================================================
+
+def rough_heston_vol(cene, H=0.10, window=30):
+    """
+    Rough volatility estimator z frakcionalni kernel.
+
+    Namesto navadnega std (ki ignorira cas), utezi pretekle donose
+    z jedrom (t-s)^(H - 0.5) — starejsi dogodki se stevejo, ampak
+    manj kot novejsi. H < 0.5 = "rough" (realisticno).
+
+    Nadomesca: sigma = std(returns) * sqrt(252)
+
+    Args:
+        cene   : list cen (close)
+        H      : Hurst exponent (0.08 kripto ... 0.12 forex)
+        window : koliko sveck gledamo nazaj
+
+    Returns:
+        sigma_rough : letna volatilnost (float)
+    """
+    if len(cene) < window + 2:
+        # Fallback na flat vol ce premalo podatkov
+        donosi = np.diff(np.log(cene))
+        return float(np.std(donosi) * np.sqrt(252))
+
+    donosi = np.diff(np.log(cene))
+    n = len(donosi)
+    w = min(window, n)
+
+    # Frakcionalni kernel utezi: novejsi = vecja utez, ampak preteklost ni pozabljena
+    # (n-i)^(H-0.5): ker H<0.5, eksponent je negativen -> novejsi dobijo vecjo utez
+    weights = np.array([(w - i) ** (H - 0.5) for i in range(w)])
+    weights = weights / weights.sum()
+
+    recent_returns = donosi[-w:]
+    local_var = float(np.sum(weights * recent_returns ** 2))
+
+    sigma_rough = float(np.sqrt(local_var * 252))
+    sigma_rough = min(max(sigma_rough, 0.03), 3.0)
+
+    return sigma_rough
+
+
+def vol_rezim(cene, H=0.10, window=30):
+    """
+    Zazna vol rezim: ali se volatilnost siri, krci ali je normalna.
+
+    Primerja rough vol zadnjega okna vs predhodnega okna.
+    - ratio > 1.4 -> EXPANDING (vol cluster, nevarnost)
+    - ratio < 0.7 -> CONTRACTING (vol se krci, mozni preboj)
+    - ostalo      -> NORMAL
+
+    Returns:
+        (rezim_str, ratio)
+    """
+    if len(cene) < window * 2 + 2:
+        return "NORMAL", 1.0
+
+    vol_zadnji    = rough_heston_vol(cene[-window:],          H, window // 2)
+    vol_predhodni = rough_heston_vol(cene[-window * 2:-window], H, window // 2)
+
+    if vol_predhodni == 0:
+        return "NORMAL", 1.0
+
+    ratio = vol_zadnji / vol_predhodni
+
+    if ratio > 1.4:
+        return "EXPANDING", round(ratio, 3)
+    elif ratio < 0.7:
+        return "CONTRACTING", round(ratio, 3)
+    else:
+        return "NORMAL", round(ratio, 3)
+
+
 # ==============================================================
 # 1. PRIDOBITEV PODATKOV
 # ==============================================================
 
 def pridobi_gold_api(simbol):
-    """Real-time spot cena za plemenite kovine."""
     try:
         r = _get(f"https://api.gold-api.com/price/{simbol}")
         S = float(r.json()["price"])
@@ -168,10 +270,10 @@ def pridobi_gold_api(simbol):
         return None
 
 
-def pridobi_yfinance(yahoo_symbol, interval, period):
+def pridobi_yfinance(yahoo_symbol, interval, period, H=0.10):
     """
-    Pridobi OHLC podatke prek yfinance knjiznice.
-    Knjiznica sama upravlja cookie/crumb session z Yahoo Finance.
+    Pridobi OHLC podatke prek yfinance.
+    Sigma izracunana z Rough Heston modelom (H parameter).
     """
     if not YF_AVAILABLE:
         return None
@@ -198,11 +300,9 @@ def pridobi_yfinance(yahoo_symbol, interval, period):
             print(f"  [yfinance] Premalo podatkov po cistenju ({len(cene)} sveck)")
             return None
 
-        donosi = np.diff(np.log(cene))
-        sigma  = float(np.std(donosi) * np.sqrt(252))
-        sigma  = min(max(sigma, 0.03), 3.0)
+        # --- Rough Heston sigma (nadomesca flat std) ---
+        sigma = rough_heston_vol(cene, H=H, window=RH_WINDOW)
 
-        # Spot cena - fast_info je hitrejsi od .info
         spot = None
         try:
             spot = ticker_obj.fast_info.last_price
@@ -211,7 +311,7 @@ def pridobi_yfinance(yahoo_symbol, interval, period):
 
         print(
             f"  [yfinance] {yahoo_symbol} ({interval}, {len(cene)} sveck): "
-            f"spot = {spot:.6g} USD  |  vol = {sigma*100:.1f}%"
+            f"spot = {spot:.6g} USD  |  rough-vol (H={H}) = {sigma*100:.1f}%"
         )
         return sigma, cene, high, low, volume, spot
 
@@ -220,7 +320,7 @@ def pridobi_yfinance(yahoo_symbol, interval, period):
         return None
 
 
-def pridobi_yahoo_raw(yahoo_symbol, interval, range_str):
+def pridobi_yahoo_raw(yahoo_symbol, interval, range_str, H=0.10):
     """Fallback: raw Yahoo Finance v8 chart API."""
     try:
         url = (
@@ -256,19 +356,17 @@ def pridobi_yahoo_raw(yahoo_symbol, interval, range_str):
         high   = [x[1] for x in combined]
         low    = [x[2] for x in combined]
         volume = list(quote.get("volume") or [])
-        # align volume length
         if len(volume) != len(cene):
             volume = []
 
-        donosi = np.diff(np.log(cene))
-        sigma  = float(np.std(donosi) * np.sqrt(252))
-        sigma  = min(max(sigma, 0.03), 3.0)
+        # --- Rough Heston sigma ---
+        sigma = rough_heston_vol(cene, H=H, window=RH_WINDOW)
 
         spot = meta.get("regularMarketPrice") or cene[-1]
 
         print(
             f"  [yahoo-raw] {yahoo_symbol} ({interval}, {len(cene)} sveck): "
-            f"spot = {spot:.6g} USD  |  vol = {sigma*100:.1f}%"
+            f"spot = {spot:.6g} USD  |  rough-vol (H={H}) = {sigma*100:.1f}%"
         )
         return sigma, cene, high, low, volume, spot
 
@@ -278,25 +376,24 @@ def pridobi_yahoo_raw(yahoo_symbol, interval, range_str):
 
 
 def pridobi_vse(ticker, cfg, interval, period):
-    print(f"\n  Pridobivam podatke za {ticker} ({cfg['opis']})...\n")
+    H, asset_class = dobi_hurst(cfg)
+    print(f"\n  Pridobivam podatke za {ticker} ({cfg['opis']})...")
+    print(f"  Asset razred: {asset_class.upper()}  |  Hurst H = {H}\n")
 
     S        = None
     hist_ret = None
 
-    # 1. Real-time spot za plemenite kovine (gold-api)
     if "gold_api" in cfg:
         S = pridobi_gold_api(cfg["gold_api"])
 
-    # 2. yfinance - primarna metoda
-    hist_ret = pridobi_yfinance(cfg["yahoo_symbol"], interval, period)
+    hist_ret = pridobi_yfinance(cfg["yahoo_symbol"], interval, period, H=H)
 
-    # 3. Raw Yahoo API fallback
     if hist_ret is None:
         print("  Poskusam fallback (raw Yahoo API)...")
         time.sleep(1.5)
         range_map = {"5d": "5d", "30d": "1mo", "90d": "3mo"}
         range_str = range_map.get(period, period)
-        hist_ret  = pridobi_yahoo_raw(cfg["yahoo_symbol"], interval, range_str)
+        hist_ret  = pridobi_yahoo_raw(cfg["yahoo_symbol"], interval, range_str, H=H)
 
     print()
 
@@ -313,7 +410,7 @@ def pridobi_vse(ticker, cfg, interval, period):
         print("  OPOZORILO: Zgodovinski podatki niso na voljo. Privzeta vol = 15%")
 
     avto = S is not None
-    return S, sigma, cene_hist, high_hist, low_hist, vol_hist, avto
+    return S, sigma, cene_hist, high_hist, low_hist, vol_hist, avto, H, asset_class
 
 
 # ==============================================================
@@ -384,7 +481,6 @@ def izracunaj_atr(cene, high, low, period=14):
 # ==============================================================
 
 def izracunaj_rsi(cene, period=14):
-    """Wilder RSI."""
     if len(cene) < period + 1:
         return None
     diffs  = np.diff(cene)
@@ -402,16 +498,8 @@ def izracunaj_rsi(cene, period=14):
 
 
 def izracunaj_macd(cene, fast=12, slow=26, signal=9):
-    """MACD line, signal line, histogram."""
     if len(cene) < slow + signal:
-        return None, None, None
-
-    def ema(data, n):
-        k   = 2 / (n + 1)
-        val = float(np.mean(data[:n]))
-        for x in data[n:]:
-            val = x * k + val * (1 - k)
-        return val
+        return None, None, None, False, False
 
     def ema_series(data, n):
         k      = 2 / (n + 1)
@@ -420,45 +508,35 @@ def izracunaj_macd(cene, fast=12, slow=26, signal=9):
             result.append(x * k + result[-1] * (1 - k))
         return result
 
-    fast_ema = ema_series(cene, fast)
-    # align slow ema to same length as fast_ema
-    slow_ema = ema_series(cene, slow)
-    # macd line starts where both EMAs exist
-    offset   = slow - fast
+    fast_ema  = ema_series(cene, fast)
+    slow_ema  = ema_series(cene, slow)
+    offset    = slow - fast
     macd_line = [f - s for f, s in zip(fast_ema[offset:], slow_ema)]
     if len(macd_line) < signal:
-        return None, None, None
-    sig_line  = ema_series(macd_line, signal)
-    macd_val  = macd_line[-1]
-    sig_val   = sig_line[-1]
-    hist_val  = macd_val - sig_val
-    # crossover: macd crossed above signal in the last candle?
+        return None, None, None, False, False
+    sig_line     = ema_series(macd_line, signal)
+    macd_val     = macd_line[-1]
+    sig_val      = sig_line[-1]
+    hist_val     = macd_val - sig_val
     crossed_up   = (macd_line[-1] > sig_line[-1]) and (macd_line[-2] <= sig_line[len(sig_line)-2]) if len(macd_line) > 1 and len(sig_line) > 1 else False
     crossed_down = (macd_line[-1] < sig_line[-1]) and (macd_line[-2] >= sig_line[len(sig_line)-2]) if len(macd_line) > 1 and len(sig_line) > 1 else False
     return round(macd_val, 6), round(sig_val, 6), round(hist_val, 6), crossed_up, crossed_down
 
 
 def izracunaj_volume_ratio(vol_hist, period=20):
-    """Ratio of last volume vs N-period average. Returns None if no volume data."""
     clean = [v for v in vol_hist if v is not None and v > 0]
     if len(clean) < period + 1:
         return None
-    avg = float(np.mean(clean[-period - 1:-1]))  # average of previous N candles
+    avg = float(np.mean(clean[-period - 1:-1]))
     if avg == 0:
         return None
     return round(clean[-1] / avg, 2)
 
 
-
 def izracunaj_adx(cene, high, low, period=14):
-    """Wilder ADX - meri mocnost trenda (ne smeri).
-    ADX < 20 = sibak trend / konsolidacija
-    ADX > 25 = jasen trend
-    """
     if len(cene) < period * 2 + 1:
         return None
-    # True Range
-    tr_list = []
+    tr_list  = []
     dm_plus  = []
     dm_minus = []
     for i in range(1, len(cene)):
@@ -471,7 +549,6 @@ def izracunaj_adx(cene, high, low, period=14):
         dm_plus.append(up   if up > down and up > 0   else 0.0)
         dm_minus.append(down if down > up and down > 0 else 0.0)
 
-    # Wilder smoothing
     def wilder_smooth(data, n):
         val = float(sum(data[:n]))
         result = [val]
@@ -480,9 +557,9 @@ def izracunaj_adx(cene, high, low, period=14):
             result.append(val)
         return result
 
-    atr14   = wilder_smooth(tr_list, period)
-    dmp14   = wilder_smooth(dm_plus,  period)
-    dmm14   = wilder_smooth(dm_minus, period)
+    atr14  = wilder_smooth(tr_list, period)
+    dmp14  = wilder_smooth(dm_plus,  period)
+    dmm14  = wilder_smooth(dm_minus, period)
 
     di_plus  = [100 * p / a if a > 0 else 0 for p, a in zip(dmp14, atr14)]
     di_minus = [100 * m / a if a > 0 else 0 for m, a in zip(dmm14, atr14)]
@@ -503,10 +580,6 @@ def izracunaj_adx(cene, high, low, period=14):
 
 
 def izracunaj_bb_width(cene, period=20, std_mult=2.0):
-    """Bollinger Band sirina relativno na ceno.
-    Nizka sirina = konsolidacija, visoka sirina = trend/volatilnost.
-    Vrne: (bb_width_pct, zgornji_band, spodnji_band, srednji_band)
-    """
     if len(cene) < period:
         return None, None, None, None
     recent = cene[-period:]
@@ -519,21 +592,13 @@ def izracunaj_bb_width(cene, period=20, std_mult=2.0):
 
 
 def zazna_konsolidacijo(cene, high, low, S):
-    """Vrne (je_konsolidacija, adx, bb_width_pct, opis).
-    je_konsolidacija = True ce sta oba pogoja izpolnjena:
-      - ADX < ADX_CONS_THRESH  (sibak trend)
-      - BB sirina < BB_WIDTH_MIN (ozek range)
-    """
     adx = izracunaj_adx(cene, high, low, period=ADX_PERIOD)
     bb_width, bb_upper, bb_lower, bb_mid = izracunaj_bb_width(cene, period=BB_PERIOD, std_mult=BB_STD)
 
     adx_sideways = (adx is not None) and (adx < ADX_CONS_THRESH)
     bb_sideways  = (bb_width is not None) and (bb_width < BB_WIDTH_MIN)
 
-    # Konsolidacija = oba pogoja
-    je_kons = adx_sideways and bb_sideways
-
-    # Ce samo en pogoj: sibka konsolidacija
+    je_kons   = adx_sideways and bb_sideways
     sibka_kons = adx_sideways or bb_sideways
 
     if je_kons:
@@ -545,11 +610,12 @@ def zazna_konsolidacijo(cene, high, low, S):
 
     return je_kons, sibka_kons, adx, bb_width, bb_upper, bb_lower, opis
 
+
 # ==============================================================
-# 6. SIGNAL LOGIKA (swing-optimised)
+# 6. SIGNAL LOGIKA (swing-optimised + Rough Heston v1.1)
 # ==============================================================
 
-def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interval):
+def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interval, H=0.10, asset_class="unknown"):
     N = len(cene_hist)
 
     # --- Konsolidacijski filter + adaptivni ATR ---
@@ -558,7 +624,6 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
         if N >= ADX_PERIOD * 2 + 1
         else (False, False, None, None, None, None, "Premalo podatkov za ADX/BB")
     )
-    # Adaptivni ATR period: v konsolidaciji uporabi krajsega
     atr_period_used = ATR_PERIOD_CONS if je_kons else ATR_PERIOD_TREND
 
     # --- Moving averages ---
@@ -566,17 +631,12 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
     sma50  = float(np.mean(cene_hist[-50:]))  if N >= 50  else float(np.mean(cene_hist)) if N > 0 else S
     sma20  = float(np.mean(cene_hist[-20:]))  if N >= 20  else float(np.mean(cene_hist)) if N > 0 else S
 
-    # Long-term trend: price vs SMA200
-    trend_gor = S > sma200
-    trend_dol = S < sma200
-
-    # Entry context: SMA50 slope (positive = rising)
+    trend_gor   = S > sma200
+    trend_dol   = S < sma200
     sma50_slope = (cene_hist[-1] - cene_hist[-6]) / cene_hist[-6] * 100 if N >= 6 else 0.0
 
     # --- RSI ---
     rsi = izracunaj_rsi(cene_hist, RSI_PERIOD) if N >= RSI_PERIOD + 1 else None
-
-    # RSI zone checks for long/short
     rsi_long_ok  = (rsi is not None) and (RSI_LONG_MIN  <= rsi <= RSI_LONG_MAX)
     rsi_short_ok = (rsi is not None) and (55 <= rsi <= 75)
 
@@ -593,9 +653,9 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
 
     # --- Volume ---
     vol_ratio = izracunaj_volume_ratio(vol_hist, VOL_PERIOD)
-    vol_ok    = (vol_ratio is None) or (vol_ratio >= VOL_THRESH)  # pass if no data
+    vol_ok    = (vol_ratio is None) or (vol_ratio >= VOL_THRESH)
 
-    # --- ATR (adaptiven period) ---
+    # --- ATR ---
     atr_raw = izracunaj_atr(cene_hist, high_hist, low_hist, period=atr_period_used)
     if atr_raw is not None:
         atr, atr_vir = atr_raw, interval
@@ -605,13 +665,15 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
     atr_period_label = f"{atr_period_used}p{'(kons)' if je_kons else ''}"
     print(f"  ATR ({atr_vir}, {atr_period_label}): {atr:.6g} USD")
 
-    # --- Scoring (swing-optimised) ---
-    # Max possible: +6 (trend+2, RSI+2, MACD+1, volume+1)
-    # Min possible: -5 (trend-2, RSI-2, MACD-1)
-    tocke = 0
+    # --- ROUGH HESTON: vol rezim ---
+    rh_rezim, rh_ratio = vol_rezim(cene_hist, H=H, window=RH_WINDOW) if N >= RH_WINDOW * 2 + 2 else ("NORMAL", 1.0)
+    print(f"  Rough Heston vol rezim (H={H}): {rh_rezim}  (ratio {rh_ratio:.3f})")
+
+    # --- Scoring ---
+    tocke   = 0
     razlogi = []
 
-    # 1. Trend filter — SMA200 (+/-2, most important)
+    # 1. Trend filter SMA200 (+/-2)
     if trend_gor:
         tocke += 2
         razlogi.append(f"Cena > SMA200 ({fmt(sma200)}) +2")
@@ -638,7 +700,7 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
     else:
         razlogi.append("RSI: premalo podatkov")
 
-    # 3. MACD (+/-1)
+    # 3. MACD (+/-1 ali +/-2 za crossover)
     if macd_val is not None:
         if macd_crossed_up:
             tocke += 2
@@ -655,7 +717,7 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
     else:
         razlogi.append("MACD: premalo podatkov")
 
-    # 4. Volume confirmation (+1, no penalty — absence = neutral)
+    # 4. Volume (+1)
     if vol_ratio is not None:
         if vol_ratio >= VOL_THRESH:
             tocke += 1
@@ -665,7 +727,7 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
     else:
         razlogi.append("Volumen: ni podatkov (kripto/forex)")
 
-    # 5. Volatility penalty (high vol = risky entry)
+    # 5. Volatility penalty (flat sigma)
     if sigma > 0.60:
         tocke -= 1
         razlogi.append(f"Vol {sigma*100:.0f}% zelo visoka -1")
@@ -673,7 +735,7 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
         tocke += 1
         razlogi.append(f"Vol {sigma*100:.0f}% nizka (stabilen trend) +1")
 
-    # 6. Konsolidacijski filter (-2 ce je trg sideways)
+    # 6. Konsolidacijski filter
     razlogi.append(f"Trg: {kons_opis}")
     if je_kons:
         tocke -= 2
@@ -681,6 +743,22 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
     elif sibka_kons:
         tocke -= 1
         razlogi.append("Sibka konsolidacija -> -1, previdnost")
+
+    # 7. === ROUGH HESTON VOL REZIM (novo v1.1) ===
+    atr_korekcija = 1.0  # privzeto brez korekcije
+    if rh_rezim == "EXPANDING":
+        tocke -= 1
+        razlogi.append(f"Rough Heston: VOL EXPANDING (ratio {rh_ratio:.2f}x) — nevarnost, ATR+15% -1")
+        atr_korekcija = 1.15   # siri SL/TP ko je vol visoka
+    elif rh_rezim == "CONTRACTING":
+        tocke += 1
+        razlogi.append(f"Rough Heston: VOL CONTRACTING (ratio {rh_ratio:.2f}x) — mozni preboj, ATR-15% +1")
+        atr_korekcija = 0.85   # ozji SL/TP ko je vol nizka
+    else:
+        razlogi.append(f"Rough Heston: VOL NORMALNA (ratio {rh_ratio:.2f}x)")
+
+    # Apliciramo ATR korekcijo
+    atr = atr * atr_korekcija
 
     # --- Decision ---
     if tocke >= 4:
@@ -694,15 +772,14 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
     else:
         odlocitev, jakost, emoji = "CAKAJ",             "trg je nevtralen",       "BELA"
 
-    # Block entry if volume not confirmed on a buy signal
     if odlocitev == "KUPI" and vol_ratio is not None and vol_ratio < VOL_THRESH:
         jakost = jakost + " (nizek volumen!)"
 
-    # --- SL / TP / Trailing breakeven ---
+    # --- SL / TP / Breakeven ---
     if odlocitev == "KUPI":
         stop_loss      = S - atr * ATR_MULT_SL
         take_profit    = S + atr * ATR_MULT_TP
-        breakeven_trig = S + atr * ATR_BREAKEVEN   # move SL to entry once hit
+        breakeven_trig = S + atr * ATR_BREAKEVEN
     elif odlocitev == "PRODAJ / NE KUPUJ":
         stop_loss      = S + atr * ATR_MULT_SL
         take_profit    = S - atr * ATR_MULT_TP
@@ -726,9 +803,12 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
         "atr_period_used": atr_period_used,
         "tocke": tocke, "razlogi": razlogi,
         "odlocitev": odlocitev, "jakost": jakost, "emoji": emoji,
-        "atr": atr, "atr_vir": atr_vir,
+        "atr": atr, "atr_vir": atr_vir, "atr_korekcija": atr_korekcija,
         "stop_loss": stop_loss, "take_profit": take_profit,
         "breakeven_trig": breakeven_trig,
+        # Rough Heston
+        "H": H, "asset_class": asset_class,
+        "rh_rezim": rh_rezim, "rh_ratio": rh_ratio,
     }
 
 
@@ -763,7 +843,8 @@ def izpisi(r, ticker, cfg, interval):
     # --- Cena & trend ---
     trend_str = "UPTREND ▲" if r["S"] > r["sma200"] else "DOWNTREND ▼"
     print(f"\n  Cena (USD)        : {fmt(r['S'])}")
-    print(f"  Volatilnost       : {r['sigma']*100:.1f}%")
+    print(f"  Volatilnost       : {r['sigma']*100:.1f}%  (Rough Heston, H={r['H']})")
+
     print(f"\n  --- TREND (SMA) ---")
     print(f"  SMA 200           : {fmt(r['sma200'])}  →  {trend_str}")
     print(f"  SMA 50            : {fmt(r['sma50'])}  (naklon: {r['sma50_slope']:+.2f}%)")
@@ -785,6 +866,15 @@ def izpisi(r, ticker, cfg, interval):
     else:
         print(f"  ATR period        : {r['atr_period_used']} (standardni trend)")
 
+    # --- Rough Heston vol rezim ---
+    print(f"\n  --- ROUGH HESTON VOL REZIM (v1.1) ---")
+    rh_ikona = {"EXPANDING": "🔺 EXPANDING", "CONTRACTING": "🔻 CONTRACTING", "NORMAL": "➡  NORMAL"}.get(r["rh_rezim"], r["rh_rezim"])
+    korekcija_str = f"{r['atr_korekcija']*100:.0f}% ATR"
+    print(f"  Asset razred      : {r['asset_class'].upper()}")
+    print(f"  Hurst H           : {r['H']}  (nizji = bolj groba vol)")
+    print(f"  Vol rezim         : {rh_ikona}  (ratio {r['rh_ratio']:.3f})")
+    print(f"  ATR korekcija     : {korekcija_str}  ({'povecana - visoka vol' if r['atr_korekcija'] > 1 else ('zmanjsana - nizka vol' if r['atr_korekcija'] < 1 else 'brez korekcije')})")
+
     # --- RSI ---
     print(f"\n  --- MOMENTUM ---")
     rsi_str = f"{r['rsi']}" if r["rsi"] is not None else "N/A"
@@ -798,7 +888,7 @@ def izpisi(r, ticker, cfg, interval):
     # --- MACD ---
     if r["macd_val"] is not None:
         cross_str = ""
-        if r["macd_crossed_up"]:   cross_str = "  ⬆ CROSSOVER NAVZGOR"
+        if r["macd_crossed_up"]:     cross_str = "  ⬆ CROSSOVER NAVZGOR"
         elif r["macd_crossed_down"]: cross_str = "  ⬇ CROSSOVER NAVZDOL"
         print(f"  MACD              : {r['macd_val']:.5f}  |  Signal: {r['sig_val']:.5f}{cross_str}")
         print(f"  MACD histogram    : {r['hist_val']:+.5f}")
@@ -826,23 +916,21 @@ def izpisi(r, ticker, cfg, interval):
 
     # --- ATR & SL/TP ---
     print(f"\n  --- ATR & NIVOJI ---")
-    print(f"  ATR ({r['atr_vir']}, {r['atr_period_used']}p) : {fmt(r['atr'])} USD")
+    print(f"  ATR ({r['atr_vir']}, {r['atr_period_used']}p) : {fmt(r['atr'])} USD  (po korekciji x{r['atr_korekcija']})")
     print(f"  SL faktor         : {ATR_MULT_SL}x ATR = {fmt(r['atr'] * ATR_MULT_SL)} USD")
     print(f"  TP faktor         : {ATR_MULT_TP}x ATR = {fmt(r['atr'] * ATR_MULT_TP)} USD")
     print(f"  Breakeven trigger : {ATR_BREAKEVEN}x ATR v profit = premakni SL na vhod")
 
     if r["stop_loss"] is not None:
-        rr        = abs(r["take_profit"] - r["S"]) / abs(r["stop_loss"] - r["S"])
-        sl_usd    = abs(r["stop_loss"]   - r["S"])
-        tp_usd    = abs(r["take_profit"] - r["S"])
-        be_usd    = abs(r["breakeven_trig"] - r["S"])
+        rr     = abs(r["take_profit"] - r["S"]) / abs(r["stop_loss"] - r["S"])
+        sl_usd = abs(r["stop_loss"]   - r["S"])
+        tp_usd = abs(r["take_profit"] - r["S"])
+        be_usd = abs(r["breakeven_trig"] - r["S"])
 
-        # Tiki: broker tick size je obicajno 0.01 USD za vecino instrumentov
-        # (BTC, XAU, WTI, delnice). Za forex (EUR/USD) je 0.00001.
         S = r["S"]
-        if S < 5:           tick = 0.00001   # forex (EUR/USD, GBP/USD)
-        elif S < 50:        tick = 0.0001    # nizki kripto / penny
-        else:               tick = 0.01      # BTC, XAU, delnice, nafta
+        if S < 5:      tick = 0.00001
+        elif S < 50:   tick = 0.0001
+        else:          tick = 0.01
 
         sl_tiki = round(sl_usd / tick)
         tp_tiki = round(tp_usd / tick)
@@ -869,42 +957,6 @@ def izpisi(r, ticker, cfg, interval):
 
 
 # ==============================================================
-# 8. CSV
-# ==============================================================
-
-#def shrani_csv(r, ticker, interval):
-#    ime     = "zgodovina_signalov.csv"
-#    obstaja = os.path.exists(ime)
-#    with open(ime, "a", newline="", encoding="utf-8") as f:
-#        w = csv.writer(f)
-#        if not obstaja:
-#            w.writerow([
-#                "datum", "ticker", "interval", "cena_usd", "volatilnost", "je_kons", "adx", "bb_width",
-#                "sma200", "sma50", "sma20", "sma50_slope",
-#                "rsi", "macd", "macd_signal", "macd_hist",
-#                "vol_ratio",
-#                "tocke", "signal", "jakost",
-#                "atr", "atr_vir", "sl_faktor", "tp_faktor",
-#                "stop_loss", "take_profit", "breakeven_trig",
-#            ])
-#       w.writerow([
-#            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-#            ticker, interval,
-#            r["S"], round(r["sigma"], 4), r["je_kons"], r["adx_val"], r["bb_width"],
-#            round(r["sma200"], 6), round(r["sma50"], 6), round(r["sma20"], 6),
-#            round(r["sma50_slope"], 4),
-#            r["rsi"],
-#            r["macd_val"], r["sig_val"], r["hist_val"],
-#            r["vol_ratio"],
-#            r["tocke"], r["odlocitev"], r["jakost"],
-#            round(r["atr"], 8), r["atr_vir"],
-#            ATR_MULT_SL, ATR_MULT_TP,
-#            r["stop_loss"], r["take_profit"], r["breakeven_trig"],
-#        ])
-#    print(f"\n  Signal shranjen -> {ime}")
-
-
-# ==============================================================
 # 8. MAIN
 # ==============================================================
 
@@ -925,7 +977,7 @@ def main():
         ticker, cfg      = izberi_ticker()
         interval, period = izberi_timeframe()
 
-        S, sigma, cene_hist, high_hist, low_hist, vol_hist, avto = pridobi_vse(
+        S, sigma, cene_hist, high_hist, low_hist, vol_hist, avto, H, asset_class = pridobi_vse(
             ticker, cfg, interval, period
         )
 
@@ -933,15 +985,21 @@ def main():
             print("  Avtomatski prenos ni uspel.")
             S = vnesi_rocno(ticker, cfg)
 
-        rezultat = izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interval)
+        rezultat = izracunaj_signal(
+            S, sigma, cene_hist, high_hist, low_hist, vol_hist, interval,
+            H=H, asset_class=asset_class
+        )
         izpisi(rezultat, ticker, cfg, interval)
-        #shrani_csv(rezultat, ticker, interval)
 
         print()
         nadaljevanje = input("  Analiziraj drug ticker? [d/n]: ").strip().lower()
         if nadaljevanje not in ("d", "da", "y", "yes"):
             print("\n  Konec. Na svidenje!\n")
             break
+
+    print("=" * 58)
+    print("  Version 1.1")
+    print("=" * 58)
 
 
 if __name__ == "__main__":
