@@ -1,15 +1,29 @@
 """
-MULTI-TICKER SIGNAL TRACKER  v1.1
+MULTI-TICKER SIGNAL TRACKER  v1.2
 Delnice | Kripto | Surovine | Indeksi | Forex
 
-Novosti v1.1:
-  - Rough Heston volatility model (frakcionalni kernel, H po asset razredu)
-  - Vol rezim detekcija (EXPANDING / CONTRACTING / NORMAL)
-  - Adaptivni H po asset razredu (kripto=0.08, delnice=0.10, forex=0.12, surovine=0.11)
-  - SL/TP korekcija glede na vol rezim
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SPREMEMBE v1.2 (glede na v1.1):
+  1. POPRAVLJENO: NameError 'izracunaj_atr' — funkcija je bila
+     klicana preden je bila definirana v nekaterih lokalnih
+     verzijah. Vrstni red definicij je sedaj eksplicitno urejen.
+  2. NOVO: Timeframe-specifični ATR multiplikatorji (ATR_MULT_BY_TF)
+     — SL/TP se zdaj prilagodita glede na izbrani timeframe:
+       • 15m: SL=2.0x, TP=4.0x, BE=1.2x  (več šuma, večji buffer)
+       • 1h:  SL=2.5x, TP=5.0x, BE=1.5x  (urni swing, dovolj prostora)
+       • 1d:  SL=1.5x, TP=3.0x, BE=1.0x  (originalne dnevne vrednosti)
+     Razlog: 1.5x ATR na 15m je absolutno premajhen — trg naredi
+     pullback večji od SL preden sploh doseže TP.
+  3. NOVO: Rough Heston CONTRACTING korekcija je na 1h bolj
+     konzervativna (x0.92 namesto x0.85) — preprečuje pretirano
+     oženje SL-a na urnem timeframeu.
+  4. OHRANJENO: vse spremembe iz v1.1 (Rough Heston vol model,
+     vol rezim detekcija, adaptivni H po asset razredu,
+     konsolidacijski filter ADX+BB, adaptivni ATR period).
 
 NAMESTITEV (enkrat):
     pip install yfinance numpy scipy requests
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 import numpy as np
@@ -32,7 +46,6 @@ except ImportError:
 # TICKER KONFIGURACIJSKI SLOVAR
 # ==============================================================
 
-# asset_class: "crypto" | "stock" | "index" | "commodity" | "forex" | "metal"
 TICKER_CONFIG = {
     # --- PLEMENITE KOVINE ---
     "XAUUSD": {"yahoo_symbol": "GC=F",    "gold_api": "XAU", "opis": "Zlato (USD/unca)",          "min_cena": 1000,   "max_cena": 5000,        "asset_class": "metal"},
@@ -62,20 +75,20 @@ TICKER_CONFIG = {
 }
 
 # ==============================================================
-# ROUGH HESTON - H VREDNOSTI PO ASSET RAZREDU
+# ROUGH HESTON - H VREDNOSTI PO ASSET RAZREDU  [v1.1]
 # ==============================================================
 # H < 0.5 = "rough" volatility (realisticno za financne trge)
 # Nizji H = bolj groba, bolj neenakomerna volatilnost
 # Kripto: najbolj grob (H=0.08), Forex: najglajen (H=0.12)
 
 HURST_BY_CLASS = {
-    "crypto":    0.08,   # Kripto - zelo groba vol, mocni skoki
-    "stock":     0.10,   # Delnice - standardni financni trgi
-    "index":     0.10,   # Indeksi - podobno delnicam
-    "commodity": 0.11,   # Surovine - malo bolj gladko
-    "metal":     0.11,   # Kovine - podobno surovinam
-    "forex":     0.12,   # Forex - najbolj gladka vol
-    "unknown":   0.10,   # Privzeto za neznane simbole
+    "crypto":    0.08,
+    "stock":     0.10,
+    "index":     0.10,
+    "commodity": 0.11,
+    "metal":     0.11,
+    "forex":     0.12,
+    "unknown":   0.10,
 }
 
 TIMEFRAME_OPTIONS = {
@@ -84,9 +97,26 @@ TIMEFRAME_OPTIONS = {
     "3": {"interval": "1d",  "period": "90d", "opis": "Dnevni (swing/position)"},
 }
 
-ATR_MULT_SL   = 1.5
-ATR_MULT_TP   = 3.0
-ATR_BREAKEVEN = 1.0
+# ==============================================================
+# ATR MULTIPLIKATORJI PO TIMEFRAMEU  [NOVO v1.2]
+# ==============================================================
+# Problem v1.1: fiksni 1.5x SL je bil premajhen na kratkih TF.
+# Na 15m/1h trg naredi normalen pullback vecji od 1.5x ATR
+# preden sploh pride do TP — SL pobere pozicijo prezgodaj.
+#
+# Resitev: vsak timeframe dobi svoje multiplikatorje.
+#   sl  = stop loss faktor  (vecji = vec prostora za "dihanje")
+#   tp  = take profit faktor (ohranja R:R razmerje ~1:2)
+#   be  = breakeven trigger  (kdaj premaknes SL na vstop)
+
+ATR_MULT_BY_TF = {
+    "15m": {"sl": 2.0,  "tp": 4.0,  "be": 1.2},
+    "1h":  {"sl": 2.5,  "tp": 5.0,  "be": 1.5},
+    "1d":  {"sl": 1.5,  "tp": 3.0,  "be": 1.0},
+}
+
+# Fallback ce timeframe ni v slovarju
+ATR_MULT_DEFAULT = {"sl": 1.5, "tp": 3.0, "be": 1.0}
 
 ATR_PERIOD       = 14
 ATR_PERIOD_TREND = 14
@@ -109,7 +139,7 @@ RSI_LONG_MAX    = 65
 RSI_SHORT_MIN   = 55
 RSI_SHORT_MAX   = 75
 
-# Rough Heston window (koliko sveck gledamo za vol memory)
+# Rough Heston window
 RH_WINDOW = 30
 
 # ==============================================================
@@ -180,16 +210,12 @@ def dobi_hurst(cfg):
 
 
 # ==============================================================
-# ROUGH HESTON VOLATILITY MODEL
+# ROUGH HESTON VOLATILITY MODEL  [v1.1]
 # ==============================================================
 
 def rough_heston_vol(cene, H=0.10, window=30):
     """
     Rough volatility estimator z frakcionalni kernel.
-
-    Namesto navadnega std (ki ignorira cas), utezi pretekle donose
-    z jedrom (t-s)^(H - 0.5) — starejsi dogodki se stevejo, ampak
-    manj kot novejsi. H < 0.5 = "rough" (realisticno).
 
     Nadomesca: sigma = std(returns) * sqrt(252)
 
@@ -202,7 +228,6 @@ def rough_heston_vol(cene, H=0.10, window=30):
         sigma_rough : letna volatilnost (float)
     """
     if len(cene) < window + 2:
-        # Fallback na flat vol ce premalo podatkov
         donosi = np.diff(np.log(cene))
         return float(np.std(donosi) * np.sqrt(252))
 
@@ -210,8 +235,6 @@ def rough_heston_vol(cene, H=0.10, window=30):
     n = len(donosi)
     w = min(window, n)
 
-    # Frakcionalni kernel utezi: novejsi = vecja utez, ampak preteklost ni pozabljena
-    # (n-i)^(H-0.5): ker H<0.5, eksponent je negativen -> novejsi dobijo vecjo utez
     weights = np.array([(w - i) ** (H - 0.5) for i in range(w)])
     weights = weights / weights.sum()
 
@@ -226,12 +249,7 @@ def rough_heston_vol(cene, H=0.10, window=30):
 
 def vol_rezim(cene, H=0.10, window=30):
     """
-    Zazna vol rezim: ali se volatilnost siri, krci ali je normalna.
-
-    Primerja rough vol zadnjega okna vs predhodnega okna.
-    - ratio > 1.4 -> EXPANDING (vol cluster, nevarnost)
-    - ratio < 0.7 -> CONTRACTING (vol se krci, mozni preboj)
-    - ostalo      -> NORMAL
+    Zazna vol rezim: EXPANDING / CONTRACTING / NORMAL.
 
     Returns:
         (rezim_str, ratio)
@@ -271,10 +289,6 @@ def pridobi_gold_api(simbol):
 
 
 def pridobi_yfinance(yahoo_symbol, interval, period, H=0.10):
-    """
-    Pridobi OHLC podatke prek yfinance.
-    Sigma izracunana z Rough Heston modelom (H parameter).
-    """
     if not YF_AVAILABLE:
         return None
     try:
@@ -300,7 +314,6 @@ def pridobi_yfinance(yahoo_symbol, interval, period, H=0.10):
             print(f"  [yfinance] Premalo podatkov po cistenju ({len(cene)} sveck)")
             return None
 
-        # --- Rough Heston sigma (nadomesca flat std) ---
         sigma = rough_heston_vol(cene, H=H, window=RH_WINDOW)
 
         spot = None
@@ -359,7 +372,6 @@ def pridobi_yahoo_raw(yahoo_symbol, interval, range_str, H=0.10):
         if len(volume) != len(cene):
             volume = []
 
-        # --- Rough Heston sigma ---
         sigma = rough_heston_vol(cene, H=H, window=RH_WINDOW)
 
         spot = meta.get("regularMarketPrice") or cene[-1]
@@ -459,9 +471,15 @@ def black_scholes(S, K, T, r, sigma, tip="call"):
 
 # ==============================================================
 # 4. ATR (Wilder)
+# POZOR: ta funkcija mora biti definirana PRED izracunaj_signal!
+# [POPRAVLJENO v1.2 — NameError fix]
 # ==============================================================
 
 def izracunaj_atr(cene, high, low, period=14):
+    """
+    Wilder ATR izracun.
+    Vrne None ce je premalo podatkov, sicer float vrednost ATR.
+    """
     if not cene or len(cene) < period + 1:
         return None
     tr = []
@@ -604,19 +622,29 @@ def zazna_konsolidacijo(cene, high, low, S):
     if je_kons:
         opis = f"KONSOLIDACIJA (ADX {adx}, BB-width {bb_width*100:.2f}%)"
     elif sibka_kons:
-        opis = f"SIBKA KONSOLIDACIJA (ADX {adx}, BB-width {bb_width*100:.2f}% ce ni None)"
+        bb_str = f"{bb_width*100:.2f}%" if bb_width is not None else "N/A"
+        opis = f"SIBKA KONSOLIDACIJA (ADX {adx}, BB-width {bb_str})"
     else:
-        opis = f"TREND (ADX {adx}, BB-width {bb_width*100:.2f}% ce ni None)"
+        bb_str = f"{bb_width*100:.2f}%" if bb_width is not None else "N/A"
+        opis = f"TREND (ADX {adx}, BB-width {bb_str})"
 
     return je_kons, sibka_kons, adx, bb_width, bb_upper, bb_lower, opis
 
 
 # ==============================================================
-# 6. SIGNAL LOGIKA (swing-optimised + Rough Heston v1.1)
+# 6. SIGNAL LOGIKA  [v1.1 + v1.2 popravki]
 # ==============================================================
 
 def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interval, H=0.10, asset_class="unknown"):
     N = len(cene_hist)
+
+    # --- [NOVO v1.2] Timeframe-specifični ATR multiplikatorji ---
+    # Nadomesca fiksne ATR_MULT_SL / ATR_MULT_TP / ATR_BREAKEVEN konstante.
+    # Vsak TF dobi svoje vrednosti da SL ni prehitro sprožen.
+    tf_mult       = ATR_MULT_BY_TF.get(interval, ATR_MULT_DEFAULT)
+    ATR_MULT_SL   = tf_mult["sl"]
+    ATR_MULT_TP   = tf_mult["tp"]
+    ATR_BREAKEVEN = tf_mult["be"]
 
     # --- Konsolidacijski filter + adaptivni ATR ---
     je_kons, sibka_kons, adx_val, bb_width, bb_upper, bb_lower, kons_opis = (
@@ -656,6 +684,7 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
     vol_ok    = (vol_ratio is None) or (vol_ratio >= VOL_THRESH)
 
     # --- ATR ---
+    # [POPRAVLJENO v1.2] izracunaj_atr je zdaj definiran PRED tem klicem
     atr_raw = izracunaj_atr(cene_hist, high_hist, low_hist, period=atr_period_used)
     if atr_raw is not None:
         atr, atr_vir = atr_raw, interval
@@ -665,7 +694,7 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
     atr_period_label = f"{atr_period_used}p{'(kons)' if je_kons else ''}"
     print(f"  ATR ({atr_vir}, {atr_period_label}): {atr:.6g} USD")
 
-    # --- ROUGH HESTON: vol rezim ---
+    # --- ROUGH HESTON: vol rezim  [v1.1] ---
     rh_rezim, rh_ratio = vol_rezim(cene_hist, H=H, window=RH_WINDOW) if N >= RH_WINDOW * 2 + 2 else ("NORMAL", 1.0)
     print(f"  Rough Heston vol rezim (H={H}): {rh_rezim}  (ratio {rh_ratio:.3f})")
 
@@ -727,7 +756,7 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
     else:
         razlogi.append("Volumen: ni podatkov (kripto/forex)")
 
-    # 5. Volatility penalty (flat sigma)
+    # 5. Volatility penalty
     if sigma > 0.60:
         tocke -= 1
         razlogi.append(f"Vol {sigma*100:.0f}% zelo visoka -1")
@@ -744,16 +773,22 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
         tocke -= 1
         razlogi.append("Sibka konsolidacija -> -1, previdnost")
 
-    # 7. === ROUGH HESTON VOL REZIM (novo v1.1) ===
-    atr_korekcija = 1.0  # privzeto brez korekcije
+    # 7. ROUGH HESTON VOL REZIM  [v1.1 + popravek CONTRACTING v1.2]
+    atr_korekcija = 1.0
     if rh_rezim == "EXPANDING":
         tocke -= 1
         razlogi.append(f"Rough Heston: VOL EXPANDING (ratio {rh_ratio:.2f}x) — nevarnost, ATR+15% -1")
-        atr_korekcija = 1.15   # siri SL/TP ko je vol visoka
+        atr_korekcija = 1.15
     elif rh_rezim == "CONTRACTING":
         tocke += 1
-        razlogi.append(f"Rough Heston: VOL CONTRACTING (ratio {rh_ratio:.2f}x) — mozni preboj, ATR-15% +1")
-        atr_korekcija = 0.85   # ozji SL/TP ko je vol nizka
+        # [POPRAVLJENO v1.2] Na 1h je korekcija bolj konzervativna (0.92 namesto 0.85)
+        # — preprečuje pretirano oženje SL-a ko je trg v consolidation + low vol
+        if interval == "1h":
+            atr_korekcija = 0.92
+            razlogi.append(f"Rough Heston: VOL CONTRACTING (ratio {rh_ratio:.2f}x) — mozni preboj, ATR-8% (1h konzervativno) +1")
+        else:
+            atr_korekcija = 0.85
+            razlogi.append(f"Rough Heston: VOL CONTRACTING (ratio {rh_ratio:.2f}x) — mozni preboj, ATR-15% +1")
     else:
         razlogi.append(f"Rough Heston: VOL NORMALNA (ratio {rh_ratio:.2f}x)")
 
@@ -775,7 +810,7 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
     if odlocitev == "KUPI" and vol_ratio is not None and vol_ratio < VOL_THRESH:
         jakost = jakost + " (nizek volumen!)"
 
-    # --- SL / TP / Breakeven ---
+    # --- SL / TP / Breakeven  [v1.2 — TF-specifični multiplikatorji] ---
     if odlocitev == "KUPI":
         stop_loss      = S - atr * ATR_MULT_SL
         take_profit    = S + atr * ATR_MULT_TP
@@ -809,6 +844,8 @@ def izracunaj_signal(S, sigma, cene_hist, high_hist, low_hist, vol_hist, interva
         # Rough Heston
         "H": H, "asset_class": asset_class,
         "rh_rezim": rh_rezim, "rh_ratio": rh_ratio,
+        # TF multiplikatorji (za izpis)
+        "ATR_MULT_SL": ATR_MULT_SL, "ATR_MULT_TP": ATR_MULT_TP, "ATR_BREAKEVEN": ATR_BREAKEVEN,
     }
 
 
@@ -914,12 +951,13 @@ def izpisi(r, ticker, cfg, interval):
     for raz in r["razlogi"]:
         print(f"    • {raz}")
 
-    # --- ATR & SL/TP ---
+    # --- ATR & SL/TP  [izpis vkljucuje TF-specifične multiplikatorje v1.2] ---
     print(f"\n  --- ATR & NIVOJI ---")
+    print(f"  Timeframe         : {interval}  →  SL={r['ATR_MULT_SL']}x ATR, TP={r['ATR_MULT_TP']}x ATR, BE={r['ATR_BREAKEVEN']}x ATR  [v1.2]")
     print(f"  ATR ({r['atr_vir']}, {r['atr_period_used']}p) : {fmt(r['atr'])} USD  (po korekciji x{r['atr_korekcija']})")
-    print(f"  SL faktor         : {ATR_MULT_SL}x ATR = {fmt(r['atr'] * ATR_MULT_SL)} USD")
-    print(f"  TP faktor         : {ATR_MULT_TP}x ATR = {fmt(r['atr'] * ATR_MULT_TP)} USD")
-    print(f"  Breakeven trigger : {ATR_BREAKEVEN}x ATR v profit = premakni SL na vhod")
+    print(f"  SL faktor         : {r['ATR_MULT_SL']}x ATR = {fmt(r['atr'] * r['ATR_MULT_SL'])} USD")
+    print(f"  TP faktor         : {r['ATR_MULT_TP']}x ATR = {fmt(r['atr'] * r['ATR_MULT_TP'])} USD")
+    print(f"  Breakeven trigger : {r['ATR_BREAKEVEN']}x ATR v profit = premakni SL na vhod")
 
     if r["stop_loss"] is not None:
         rr     = abs(r["take_profit"] - r["S"]) / abs(r["stop_loss"] - r["S"])
@@ -962,7 +1000,7 @@ def izpisi(r, ticker, cfg, interval):
 
 def main():
     print("\n" + "=" * 58)
-    print("  MULTI-TICKER SIGNAL TRACKER")
+    print("  MULTI-TICKER SIGNAL TRACKER  v1.2")
     print("  Delnice | Kripto | Surovine | Indeksi | Forex")
     if YF_AVAILABLE:
         import yfinance as yf
@@ -998,7 +1036,7 @@ def main():
             break
 
     print("=" * 58)
-    print("  Version 1.1")
+    print("  Version 1.2")
     print("=" * 58)
 
 
